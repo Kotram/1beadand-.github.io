@@ -1,0 +1,564 @@
+---
+title: "Szöul kerékpármegosztó kereslete"
+author: "Takács Márton"
+date: "2023-10-07"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/takac/OneDrive/Asztali gép/Egyetem/3. félév/Rizz/beadandó/1/archive")
+nyers_szoul <- read.csv2('SeoulBikeData.csv', header = TRUE, sep = ",")
+df_szoul <- as.data.frame(nyers_szoul)
+colnames(df_szoul) <- c('Datum',
+'Berelt biciklik (db)',
+'Ora',
+'Homerseklet (C)',
+'Paratartalom (%)',
+'Szelsebesseg (m/s)',
+'Lathatosag (10m)',
+'Harmatpont homerseklet (C)',
+'Napsugarzas (MJ/m2)',
+'Eso (mm)',
+'Ho (cm)',
+'Evszak',
+'Unnep',
+'Mukodesi_nap')
+library('lubridate')
+df_szoul[ ,1] = data.frame(rep(seq(dmy("01/12/2017"), by = 1, length.out = 24*365), each = 24))
+df_szoul$Datum <- as.POSIXct(df_szoul$Datum)
+df_szoul$'Evszak' <- factor(df_szoul$'Evszak',
+                            levels = c("Winter", "Spring", "Summer", "Autumn"),
+                            labels = c("Tel", "Tavasz", "Nyar", "Osz"))
+df_szoul$'Unnep' <- factor(df_szoul$'Unnep',
+                           levels = c("Holiday", "No Holiday"),
+                           labels = c("Unnepnap", "Nem unnepnap"))
+df_szoul$'Mukodesi_nap' <- factor(df_szoul$'Mukodesi_nap',
+                            levels = c("Yes", "No"),
+                            labels = c("Igen", "Nem"))
+dfmodified_szoul <- df_szoul[ ,2:14]
+colnames(dfmodified_szoul) <- c('Berelt_biciklik',
+'Ora',
+'Homerseklet',
+'Paratartalom',
+'Szelsebesseg',
+'Lathatosag',
+'Harmatpont_homerseklet',
+'Napsugarzas',
+'Eso',
+'Ho',
+'Evszak',
+'Unnep',
+'Mukodesi_nap')
+
+# korrelaciohoz
+dfmodified_szoul$'Evszak' <- factor(df_szoul$'Evszak',
+                            levels = c("Tel", "Tavasz", "Nyar", "Osz"),
+                            labels = c(4, 1, 2, 3))
+dfmodified_szoul$'Unnep' <- factor(df_szoul$'Unnep',
+                           levels = c("Unnepnap", "Nem unnepnap"),
+                           labels = c(1, 0))
+dfmodified_szoul$'Mukodesi_nap' <- factor(df_szoul$'Mukodesi_nap',
+                            levels = c("Igen", "Nem"),
+                            labels = c(1, 0))
+```
+
+## Bevezető
+
+**Pedálozzunk az Adatok Világába Szöul Városában**
+
+A városi közlekedési szokások folyamatosan változnak, és a kerékpármegosztás egy új korszakot hozott létre. De milyen tényezők befolyásolják a Szöul városában található kerékpármegosztó rendszer keresletét? Ebben az elemzésben kiderítjük a választ.
+
+*Az adatok 2017.12.01-2018.11.30 felmérés eredményét képzik és [ezen a linken](https://www.kaggle.com/datasets/joebeachcapital/seoul-bike-sharing/data) lehet megtekinteni illetve letölteni a teljes adatbázist.*
+
+**Adatok**
+
+A vizsgált adatbázis `r nrow(df_szoul)` sorból (365 nap x 24 óra) és `r ncol(df_szoul)` oszlopból áll. A következő két táblázatban láthatjuk az első hat, valamint az utolsó hat sorát az adatbázisnak.
+
+```{r}
+library('knitr')
+library('kableExtra')
+kable(head(df_szoul), format = "html", align = "c")
+kable(tail(df_szoul), format = "html", align = "c")
+```
+
+Illetve fontos még kiemelni a legtöbb bérelt biciklihez tartozó adatokat:
+
+```{r}
+maxd <- max(df_szoul$`Berelt biciklik (db)`)
+sor <- df_szoul[df_szoul$`Berelt biciklik (db)` == maxd, ]
+kable(sor, format = "html", align = "c")
+```
+
+**Általános statisztikai mutatók**
+
+Alább az általános statisztikai adatokat mutatja a táblázat. Jól látszik, hogy például a bérelt biciklik száma a `r max(df_szoul[, 2]) - min(df_szoul[, 2])` tartományba esik. Izgalmasabb viszont, hogy az eső adatsorának ferdeség (skewness) értéke igen magas (14.5), ami azt jelzi, hogy az eloszlás erősen jobbra ferde. Ez azt sugallja, hogy a csúcs az alacsonyabb értékek felé tolódik, és az esős időjárási események száma magasabb lehet az eloszlás bal oldalán. Az ilyen erősen pozitív skewness gyakran jellemző az eső adatokra, mivel ritkábban fordul elő nagy mennyiségű eső, de amikor bekövetkezik, akkor jelentős lehet.
+
+A hó mennyisége szintén változó, és az eloszlását az esőétől eltérően értelmezzük. A hó adatsorának ferdeség értéke 7.2, ami szintén pozitív irányba mutat, de kevésbé erősen, mint az eső esetében. Ez azt sugallja, hogy a hó mennyisége is inkább balra nyúlik el, de a csúcs kisebb értékek körül helyezkedik el, és a nagyobb hómennyiségek ritkábban fordulnak elő.
+
+Az eső adatok csúcsossága 284.8, ami rendkívül magas kurtózist jelent. Az eső adatok hegyesebb eloszlást mutatnak, és az értékek nagyon koncentrálódnak a csúcson. Ez azt jelzi, hogy az eső mennyisége nagyon szorosan csoportosul bizonyos értékek körül, és a szóródás rendkívül korlátozott, ami szintén látszik a táblázatban.
+
+A hó adatok csúcsossága 57.2. Ez is magas kurtózis, bár kisebb értékkel, mint az eső esetében. A hó adatok is hegyesebb eloszlást mutatnak, de az értékek kevésbé koncentrálódnak a csúcson, mint az eső esetében.
+
+A többi változó inkább azt sugallja, hogy az eloszlás - a skewness nullához közeli értékeiből következtetve - szimmetrikusabb, - kurtosisból ítélve - normális eloszláshoz hasonlóan csúcsos, természetesen kisebb eltéréseket mutat az eloszlás.
+
+```{r}
+library('psych')
+for (i in 2:10) {
+  df_szoul[ ,i] <- as.numeric(df_szoul[ ,i])
+}
+kable(round(describe(df_szoul[ ,2:11]), 1), format = "html", align = "c")
+```
+
+## második fejezet
+
+**hisztogram**
+
+Az alábbi hisztogram megmutatja, hogy hány alkalommal béreltek m (*x1 \< m \< x2*) mennyiségű biciklit. A hisztogramon egyértelműen látszik, hogy a bérelt biciklik száma balra ferde eloszlást mutat, holott a ferdeség számításának az eredménye 1.2, ami jobbra ferde eloszlást jelentene. Ennek különböző okai lehetnek:
+
+1.  például a kiugró értékek jelentős mértékben befolyásolják a ferdeség értékét, ez okozhatja a nyúlást
+
+2.  a hisztogram önmagában nem ad teljes képet az eloszlásról, lehet, hogy komplexebb mintázatokat mutat (pl. többszörös csúcsok, aszimmetria váltakozása), amiket a skewness összefoglaló értéke nem teljesen tükröz.
+
+```{r}
+library(shiny)
+
+ui <- fluidPage(
+  titlePanel("Kerekpar berles"),
+
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput('breaks', "Torespontok", min = 5, max = 20, value = 10)
+    ),
+    mainPanel(
+      plotOutput("histogram"),
+      textOutput("magyarazat")
+    )
+  )
+)
+
+server <- function(input, output) {
+  output$histogram <- renderPlot({
+    hist(df_szoul$'Berelt biciklik (db)', breaks = input$breaks,
+              col = "lightblue",
+              main = "Kerekpar berles gyakorisaga",
+              xlab = "Berelt kerekpar (db)",
+              ylab = "Gyakorisag")
+    })
+  }
+
+shinyApp(ui, server)
+```
+
+**pontdiagram**
+
+Ennek a pontdiagramnak a célja, hogy a választott változó függvényében tekintsük, hogyan alakult a bérelt biciklik száma. Tőkéletesen látszik mondjuk az, hogy a bérelt biciklik számának eloszlása a napszak függvényében kétmóduszú. Ez azt jelenti, hogy az eloszlásban két kiemelkedő csúcs figyelhető meg, amelyek idővel körvonalazódnak.
+
+Az első kiugrás reggel 8 órakor tapasztalható, amikor a biciklik iránti kereslet jelentősen megnő. Ez az időpont valószínűleg a reggeli órákban elinduló munkába vagy tanulásba tartó emberek napi biciklihasználatának kezdetét jelzi.
+
+A második kiugrás az esti órákban, különösen 18 óra körül figyelhető meg. Ez az időpont jellemzően azokat az órákat jelzi, amikor az emberek hazaérkeznek a munkából vagy tanulásból, és újra igénylik a bicikliket.
+
+De látszik még az is, hogy szívesebben indulnak kerékpározni az emberek jó láthatósági viszonyok között és 0 eső vagy hó mellett.
+
+Ezek a megfigyelések nem csak a biciklik kölcsönzésének trendjeit tükrözik, hanem a városi élet szokásait és ritmusát is, segítve ezzel a városi mobilitási rendszerek optimalizálását.
+
+```{r}
+library(shiny)
+
+ui <- fluidPage(
+  titlePanel("Pontdiagram"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput('sel1', "x tengely", choices = names(dfmodified_szoul[ ,1:10]), selected = "Ora"),
+    ),
+    mainPanel(
+      plotOutput("plot")
+    )
+  )
+)
+
+server <- function(input, output) {
+  output$plot <- renderPlot({
+    x_ertek <- as.numeric(dfmodified_szoul[ ,input$sel1])
+    y_ertek <- as.numeric(dfmodified_szoul[ ,1])
+    
+    plot(x_ertek, y_ertek,
+              col = "lightblue",
+              main = "Pontdiagram",
+              xlab = input$sel1,
+              ylab = "Berelt biciklik (db)",
+              xlim = c(min(x_ertek), max(x_ertek)),
+              ylim = c(min(y_ertek), max(y_ertek)),
+              pch = 20
+)
+  })
+    }
+
+shinyApp(ui, server)
+```
+
+Alább egy korrelációs mátrix látható. Az elemzés szempontjából említésre méltó a hőmérséklet és bérelt biciklik száma, évszak és hőmérséklet, valamint az óra és bérelt biciklik száma közötti kapcsolat. Ebből az utóbbit korábban igazolta a pontdiagram.
+
+```{r}
+for (i in 1:13) {
+  dfmodified_szoul[ ,i] <- as.numeric(dfmodified_szoul[ ,i])
+}
+
+library(ggcorrplot)
+
+cormatrix <- cor(dfmodified_szoul)
+
+ui <- fluidPage(
+  titlePanel("Korrelacio"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput('szam', 'Válassz szignifikanciaértéket', min = -1, max = 1,
+                  value = 0.0, step = 0.05, 
+                  ticks = TRUE,
+                  animate = TRUE)),
+  mainPanel(
+    plotOutput('plot'))))
+
+server <- function(input, output) {
+  
+  observe({
+  
+    filtered_cormatrix <- cormatrix
+    filtered_cormatrix[cormatrix <= input$szam] <- NA
+  
+  output$plot <- renderPlot({
+    ggcorrplot(filtered_cormatrix, type = "full", lab = TRUE, lab_size = 2.5, title = "Korrelacios matrix",
+               colors = c("red", "yellow", "green"), ggtheme = theme_minimal)
+    })
+  })
+}
+
+shinyApp(ui, server)
+```
+
+Az első két pontdiagramon a hőmérséklet és bérelt kerékpárok közötti kapcsolatot a diagramok alakja is igazolja.
+
+```{r}
+df_szoul_365 <- df_szoul
+
+for (i in 2:11) {
+ df_szoul_365[, i] <- as.numeric(df_szoul_365[, i])
+}
+
+for (k in 2:11) {
+  for (j in 1:365) {
+    i_start <- (j - 1) * 24 + 1
+    i_end <- j * 24
+    df_szoul_365[j, k] <- round(sum(df_szoul_365[i_start:i_end, k]) / 24, 2)
+  }
+}
+
+for (j in 1:365) {
+  df_szoul_365[j, 1] <- df_szoul[(j - 1) * 24 + 1, 1]
+}
+
+for (j in 1:365) {
+  df_szoul_365[j, 12:14] <- df_szoul[(j - 1) * 24 + 1, 12:14]
+}
+
+df_szoul_365 <- df_szoul_365[-(366:8760), ]
+
+df_szoul_365 <- df_szoul_365[, -(3)]
+
+df_szoul_365_tisztitott <- df_szoul_365[, 2:13]
+
+# regressziohoz
+
+df_szoul_365_tisztitott$'Evszak' <- factor(df_szoul_365_tisztitott$'Evszak',
+                            levels = c("Tel", "Tavasz", "Nyar", "Osz"),
+                            labels = c(4, 1, 2, 3))
+df_szoul_365_tisztitott$'Unnep' <- factor(df_szoul_365_tisztitott$'Unnep',
+                           levels = c("Unnepnap", "Nem unnepnap"),
+                           labels = c(1, 0))
+df_szoul_365_tisztitott$'Mukodesi_nap' <- factor(df_szoul_365_tisztitott$'Mukodesi_nap',
+                            levels = c("Igen", "Nem"),
+                            labels = c(1, 0))
+
+par(mfrow = c(1, 2), cex.main = 0.95)
+plot(df_szoul_365$Datum, df_szoul_365$`Berelt biciklik (db)`,
+     col = scales::alpha("lightgreen", 0.8),
+     xlab = "Idő", ylab = "Bérelt biciklik (db)", main = "Korrelacio szemleltetese pontdiagramon",
+     pch = 19)
+plot(df_szoul_365$Datum, df_szoul_365$`Homerseklet (C)`,
+     col = scales::alpha("lightgreen", 0.8),
+     xlab = "Idő", ylab = "Hőmérséklet (c)",
+     pch = 19)
+dev.off()
+```
+
+A következő dobozábrán látható a hőmérséklet évszakonkénti középértéke (vízszintes vonal) és eloszlása (doboz magassága). Tökéletesen látszik az évszakok közötti különbség, illetve az adott évszakon belüli hőmérséklet-ingadozás. Kiugró értékek nem jellemzik az eloszlást.
+
+```{r}
+boxplot(`Homerseklet (C)` ~ Evszak, data = df_szoul, col = "lightblue", xlab = "Evszak", ylab =
+          "Homerseklet")
+```
+
+Alább a dobozábrán látjuk az ünnepnapokra és nem ünnepnapokra vonatkozó alapvető statisztikai adatait a bicikli bérlésnek. Látszik, hogy ünnepnapokon is bérelnek az emberek kerékpárokat, de közel sem annyit, mint egyébként. Az outlier adatok túlnyomó többsége sem ünnepnapokhoz tartozik. Ez azzal a korábbi megállapítással állhat összefüggésben, hogy sokan munkába vagy iskolába jutás miatt használnak kerékpárt, de ünnepnapokon nem mennek be ezekre a helyekre.
+
+```{r}
+boxplot(`Berelt biciklik (db)` ~ Unnep, data = df_szoul, col = "lightblue", xlab = "Unnepnap", ylab = 
+          "Berelt biciklik")
+```
+
+A következő ábra az előző állítást igazolja. Főleg munkanapokon bérelnek biciklit az emberek, egyébként szinte egyáltalán nem.
+
+```{r}
+boxplot(`Berelt biciklik (db)` ~ `Mukodesi_nap`, data = df_szoul, col = "lightblue", xlab = "Mukodesi 
+        nap", ylab = "Berelt biciklik")
+```
+
+Ahogy az első dobozábra bizonyítja - télen hideg van. Az utolsó dobozábra annyit mutat, hogy hidegben kevésbé vannak kerékpározós hangulatukban az emberek, feltehetőleg inkább tömegközlekedést vagy autót használnak a munkába, iskolába jutáshoz.
+
+```{r}
+boxplot(`Berelt biciklik (db)` ~ Evszak, data = df_szoul, col = "lightblue", xlab = "Evszakok",
+        ylab = "Berelt biciklik")
+```
+
+**Hétköznapi és hétvégi szokások**
+
+Alább azt vizsgáljuk, hogy van-e kapcsolat a hét napjai és a bérelt kerékpárok száma között.
+
+```{r}
+df_days <- data.frame(Datum = seq(as.Date("2017-12-01"), as.Date("2018-11-30"), by = "days"),
+                     Berelt_bic = df_szoul_365[ ,2])
+
+df_days$Nap <- weekdays(df_days$Datum)
+
+aovh <- aov(Berelt_bic ~ Nap, data = df_days)
+  
+    aovh_summary <- summary(aovh)
+    
+    options(scipen = 30)
+  
+    p_e <- aovh_summary[[1]][["Pr(>F)"]]
+    fph <- format(p_e, digits = 4) 
+    kable(fph, format = "html", align = "c")
+    
+```
+
+A 0.81-es érték azt jelenti, hogy nem tudjuk elutasítani a nullhipotézist, tehát a kapcsolat valószínűleg nem szignifikáns. Elég ha belegondolunk, hogy miért kerékpároznak az emberek. Hétköznap munkába vagy iskolába mennek biciklivel, hétvégén viszont szívesen mennek kikapcsolódásként biciklizni, vagy ismerősökkel találkozóra és még számos oka lehet. Ezeket a számokban természetesen nem látjuk.
+
+```{r}
+df_days$hetvege <- ifelse(df_days$Nap %in% c("Saturday", "Sunday"), "Hetvege", "Hetkoznap")
+
+kable(c("Hétvégén átlagosan ", round(mean(df_days$Berelt_bic[df_days$hetvege == "Hetvege"]), 0), "darab
+        biciklit kölcsönöznek"), format = "html", align = "l")
+kable(c("Hétköznap átlagosan ", round(mean(df_days$Berelt_bic[df_days$hetvege == "Hetkoznap"]), 0), "darab
+        biciklit kölcsönöznek"), format = "html", align = "l")
+
+boxplot(`Berelt_bic` ~ hetvege, data = df_days, col = "lightblue", xlab = "Nap tipusa", ylab = "Berelt
+        biciklik")
+
+```
+
+
+A dobozábrán látszik, hogy inkább hétköznap bérelnek több kerékpárt az emberek.
+
+## Regresszió
+
+**Regressziószámítás**
+
+A Residuals vs. Fitted grafikon megmutatja a becslés és a tényleges értékek közötti különbséget, illetve a azokat az értékeket mutatja, amelyeket a modell a prediktorok alapján becsül. A "Residuals vs. Fitted" ábrán a pontok piros vonalhoz képest levő elhelyezkedéséből az látszik, hogy a modell jó illeszkedést mutat.
+
+A Q-Q Residuals diagramon az adatok az egyenes mentén közelítik a normális eloszlást, az azt jelenti, hogy a maradékok normális eloszlásúak. A kiugró értékek -3-nál azt sugallhatják, hogy néhány megfigyelés nagyon eltér a normális eloszlástól ezen a ponton.
+
+```{r}
+library(broom)
+dfreg_szoul <- df_szoul_365_tisztitott
+colnames(dfreg_szoul) <- c('Berelt_darab', 'Homerseklet', 'Paratartalom', 'Szelsebesseg', 'Lathatosag',
+                           'Harmatpont_hom', 'Napsugarzas', 'Eso', 'Ho', 'Evszak', 'Unnep',
+                           'Mukodesi_nap')
+
+dfreg_szoul$Berelt_darab <- log(dfreg_szoul$Berelt_darab + 1)
+
+linreg <- lm(Berelt_darab ~ Homerseklet + Paratartalom + Szelsebesseg + Lathatosag + Harmatpont_hom + Napsugarzas + Eso + Ho + Evszak + Unnep + Mukodesi_nap, data = dfreg_szoul)
+
+par(mfrow = c(2, 1), mar = c(2, 2, 2, 1.25))
+
+plot(linreg, which = 1:2)
+```
+
+**Jarque-Bera teszt**
+
+Jarque-Bera teszttel azt vizsgáljuk, hogy a regresszió hibái normális eloszlásúak-e.
+
+-   Nullhipotézis: a változó normális eloszlást követ.
+-   Alternatív hipotézis: a változó nem követ normális eloszlást.
+
+A p értékeket a következőképpen értelmezzük: 0.05 alatti érték esetén elfogadjuk a nullhipotézist, 0.05 feletti p érték esetén elutasítjuk azt. A JB érték minél távolabb van a nullától, annál valószínűbb, hogy az adott változó nem követ normális eloszlást.
+
+```{r}
+library(moments)
+print_jb_result <- function(name, jb_test_result) {
+  cat("Jarque-Bera teszt eredmenye a(z)", name, "vektorra:\n")
+  print(jb_test_result)
+  cat("\n")
+}
+
+### Csak a maradékoknál van értelme ?!
+
+for (i in names(linreg)) {
+  if (is.numeric(linreg[[i]])) {
+    jb_test_result <- jarque.test(linreg[[i]])
+    print_jb_result(i, jb_test_result)
+  } else {
+    cat("A(z)", i, "nem numerikus vektor.\n\n")
+  }
+}
+```
+
+**Automatikus modellszelekció**
+
+A stepwise regresszió AIC alapon (automatikus modellszelekció) egy olyan módszer, ami megnézi az egyes modellek minőségét, majd kiválasztja azok közül a leghatékonyabbat. Az Akaike Információs Kritérium meghatározza adott modellben az elvesztett információ relatív mértékét: minél kevesebb információt veszít egy modell, annál jobb a minősége. Az AIC egyaránt ki van téve a túlilleszkedés és az alulilleszkedés kockázatának.
+
+Az eredmények kiértékeléséhez a maradékok statisztikáját használtuk fel. A maradékok a modell által becsült értékek és a tényleges észlelt értékek közötti különbségeket jelentik. A **`summary`** függvény segítségével részletes statisztikai információkat nyertünk a maradékokról.
+
+Az átlag nulla, ami azt jelzi, hogy a modell jó illeszkedést ért el. A maradékok statisztikai jellemzői azt mutatják, hogy a modellezés során keletkező hibák szimmetrikusak és közelítőleg normális eloszlást mutatnak. Ez azt sugallja, hogy a válaszváltozó (Berelt_darab) és a prediktorok közötti kapcsolatot jól sikerült leírni a modellünkkel.
+
+```{r}
+library(kableExtra)
+library(MASS)
+step_linreg <- stepAIC(object = linreg, direction = "both", trace = 0, k = log(dim(df_szoul_365_tisztitott)[ 1 ]))
+
+vegso <- summary(step_linreg)
+kable(summary(as.data.frame(vegso$residuals)), format = "html", align = "c")
+```
+
+
+Az automatikus modellszelekciót követően elkészített lineáris regressziós modell együtthatóinak értelmezése kulcsfontosságú a kutatás megértéséhez. Az alábbi táblázat összefoglalja a becslések statisztikai jellemzőit:
+
+```{r}
+kable(summary(as.data.frame(vegso$coefficients)), format = "html", align = "c")
+```
+
+A becslések (estimate) azt mutatják, hogy a modell együtthatói a változókhoz kapcsolódnak. A legalacsonyabb becslés -6.289262, míg a legnagyobb 5.826255. Ezek az együtthatók azt jelentik, hogy a hozzájuk tartozó változók hatása jelentős lehet. A standard hibák kis értékei azt jelzik, hogy a becslések meglehetősen pontosak. A t-statisztikák azt mutatják, hogy az együtthatók szignifikánsak-e. A kisebb abszolút értékű t-statisztikák lehetnek kevésbé szignifikánsak, míg a nagyobb értékűek azt jelzik, hogy az együtthatók szignifikánsabbak. A p-értékek azt mutatják, hogy milyen valószínűséggel tér el egy-egy becslés a nullától. Az alacsony p-értékek azt sugallhatják, hogy az együtthatók szignifikánsak.
+
+Az együtthatók értékeinek és statisztikai jellemzőinek értelmezése alapján úgy tűnik, hogy a modell megfelelően illeszkedik a biciklibérlési adatokra. A szignifikáns együtthatók alapján megállapítható, hogy a kiválasztott meteorológiai és egyéb prediktorok jelentősen befolyásolják a biciklibérlést Szöulban.
+
+```{r}
+kable(as.data.frame(vegso$r.squared), format = "html", align = "c")
+```
+
+
+Az R-négyzet érték, amelyet a modellünk számára számoltunk azt mutatja meg, hogy a kiválasztott magyarázó változók körülbelül 87.93%-ban magyarázzák meg a biciklibérlési adatokban bekövetkező változásokat.  Ez azt sugallja, hogy a válaszváltozóban bekövetkező változásoknak nagy részét a modell által bevezetett prediktorok magyarázzák.
+
+
+```{r}
+kable(as.data.frame(vegso$adj.r.squared), format = "html", align = "c")
+```
+
+A módosított R-négyzet figyelembe veszi a prediktorok számát és a minta méretét. Pont ilyenkor hasznos, amikor több prediktor van a képben, mert segít korrigálni az R-négyzet hajlamát a túltanulásra amikor új prediktorokat vezetünk a modellbe. A 0.8763 érték azt mutatja, hogy a modellnek magas magyarázó ereje van azután is, hogy figyelembe vettük a prediktorok számát és a minta méretét. Ez azt jelenti, hogy a módell nem túlilleszkedett az adatokhoz, és az általunk bevezetett prediktorok hasznosak a válaszváltozó magyarázatában.
+
+```{r}
+kable(summary(as.data.frame(vegso$fstatistic)), format = "html", align = "c")
+```
+
+Az F-statisztika értékei azt mutatják, hogy a modell illeszkedése és a prediktorok szignifikanciája szempontjából milyen teljesítményt nyújt a modell. Általában az F-statisztika növekedése azt jelzi, hogy a modell illeszkedése javul, és a prediktorok együttes hatása szignifikánsabbá válik.
+
+A magas F-statisztika érték (közel a maximumhoz) arra utalhat, hogy a modell szignifikánsan jobban illeszkedik, mint egy null modell (amely nem tartalmaz prediktorokat). A kisebb értékek arra utalhatnak, hogy a modell illeszkedése nem olyan jelentős vagy a prediktorok hatása kevésbé szignifikáns.
+
+Ezen értékek alapján azt mondhatjuk, hogy a modell általánosságban szignifikánsan jobban illeszkedik, és a prediktorok együttes hatása szignifikáns.
+
+**Szignifikáns kapcsolat vizsgálata**
+
+Van-e szignifikáns kapcsolat a bérelt biciklik száma és B kategorikus változó között?
+
+```{r}
+ui <- fluidPage(
+  titlePanel("Van-e szignifikans kapcsolat a berelt biciklik szama es B kozott?"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput('variable', 'Valassz valtozot (B):', choices = names(df_szoul[, 12:14]), selected = "Evszak"),
+      helpText("Szignifikanciakodok: p < 0.05 - szignifikans a kapcsolat, p > 0.05 - nem szignifikans a kapcsolat")
+    ),
+    mainPanel(
+      textOutput("q")
+    )
+  )
+)
+
+server <- function(input, output) {
+  observe({
+    aov_formula <- reactive({
+      as.formula(paste0("`Berelt biciklik (db)` ~ ", input$variable))
+    })
+    
+    aovfun <- aov(formula = aov_formula(), data = df_szoul)
+  
+    aovfun_summary <- summary(aovfun)
+    
+    options(scipen = 30)
+  
+    output$q <- renderText({
+      p_ertek <- aovfun_summary[[1]][["Pr(>F)"]]
+      fp <- format(p_ertek, digits = 4)
+      fp
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+```
+
+A modell elemzése alapján megállapíthatjuk, hogy a bérelt biciklik száma és az évszak, ünnep, működési nap között szignifikáns kapcsolat mutatkozik. Ennek alátámasztására szolgál a fent látható panel.
+
+## Multikollinearitás vizsgálata
+
+A VIF értékek azt mutatják, hogy mennyire erős a korreláció két vagy több prediktor között a modellben. Az alacsonyabb VIF értékek azt jelentik, hogy a prediktorok kevésbé kollineárisak egymással, és a magasabb értékek azt sugallhatják, hogy erős kapcsolat áll fenn a prediktorok között. Magasabb VIF értékek esetén a változók erősen kapcsolódnak egymáshoz a modellben, ami instabilitást és torzulást okozhat.
+
+```{r}
+mkl <- round(car::vif(linreg), 2)
+kable(mkl, format = "html", align = "c")
+```
+
+
+Látszik, hogy a hőmérséklet és a harmatpont hőmérséklet  nagyonmagas GVIF értéket mutatnak, tehát erősen kollineárisak egymással. Ekkor érdemes az egyiket kivenni a modellből.
+
+A páratartalom és az évszak is magas GVIF értéket mutat, ami utalhat arra, hogy az évszakok közötti kapcsolatok megerősítik a kollinearitást. Ezt viszont nem érdemes kivenni a modellből, mert fontos magyarázó változó.
+
+A többi prediktor alacsonyabb GVIF értékeket mutat, ami annyit jelent, hogy közöttük kevésbé erős a kollinearitás.
+
+## Autokorreláció
+
+Az ACF (AutoCorrelation Function) grafikonon az oszlopok a korrelációt vagy PACF (Partial AutoCorrelation Function) parciális korrelációt mutatják az adott "lag" értékhez képest. A "lag" egyszerűen azt jelenti, hogy mennyi idővel korábbi értékekkel van összehasonlítva a jelenlegi érték.
+
+Az ACF diagramon a periodikus mintázat miatt az értékek között hosszabb távú korreláció van jelen.
+
+A PACF az idősorozat aktuális értéke és egy adott "lag" érték közötti korrelációt mutatja, miközben kizárja a köztes lag-ok hatását. Az ábrán hirtelen leeső vagy oszlopok arra utalhatnak, hogy egy adott "lag" értékhez tartozó korreláció erős, míg a többi "lag" értékhez tartozó korreláció gyenge vagy elenyésző.
+
+```{r}
+library(astsa)
+
+df_acf <- acf2(df_szoul$`Berelt biciklik (db)`, col = "lightblue3", lwd = 3, gg = TRUE)
+
+df_acf[0, 0]
+```
+
+Mivel az ACF periodikus (autoregresszív modell) és a PACF hirtelen leeső (mozgóátlagolású modell), így az ARMA (AutoRegressive Moving Average) modellel lehet számolni a következőképpen.
+
+```{r}
+arma_model <- arima(df_szoul$`Berelt biciklik (db)`, order = c(1, 0, 1))
+
+jarque.test(as.vector(arma_model$residuals))
+```
+
+Az **`arma_model`** maradékainak JB teszt eredménye megmutatja, hogy a modell jól illeszkedik a normális eloszláshoz.
+
+```{r}
+#step_arma <- stepAIC(object = arma_model, direction = "both", trace = 0, k = log(dim(df_szoul[ 1 ])))
+
+#vegso2 <- summary(step_arma)
+
+#kable(summary(as.data.frame(vegso2$residuals)), format = "html", align = "c")
+```
+
+Ide valami szöveg még
+
+## Összefoglaló
